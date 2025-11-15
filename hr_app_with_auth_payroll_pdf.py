@@ -14,10 +14,16 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import numpy as np
-import plotly.express as px
 from datetime import date, datetime
 from passlib.hash import pbkdf2_sha256
 from fpdf import FPDF
+
+# Try to import plotly; if not available, fall back to Streamlit charts
+try:
+    import plotly.express as px
+    PLOTLY_AVAILABLE = True
+except Exception:
+    PLOTLY_AVAILABLE = False
 
 # ---------------------------
 # Database setup
@@ -318,7 +324,7 @@ if choice == 'Dashboard':
     # payroll df and computed KPIs
     payroll_df = get_payroll_df()
     avg_net = float(payroll_df['net_pay'].mean()) if (not payroll_df.empty and 'net_pay' in payroll_df.columns) else 0.0
-    recent_net = float(payroll_df.sort_values(['generated_on'], ascending=False).head(1)['net_pay'].iloc[0]) if not payroll_df.empty else 0.0
+    recent_net = float(payroll_df.sort_values(['generated_on'], ascending=False).head(1)['net_pay'].iloc[0]) if (not payroll_df.empty and 'net_pay' in payroll_df.columns) else 0.0
 
     # Top KPI cards
     k1, k2, k3, k4 = st.columns([1.6,1,1,1])
@@ -357,9 +363,13 @@ if choice == 'Dashboard':
         emp_df = get_employees_df()
         if not emp_df.empty:
             dept_counts = emp_df.groupby('department')['emp_id'].count().reset_index().rename(columns={'emp_id':'count'})
-            fig_dept = px.bar(dept_counts, x='department', y='count', text='count', title='Headcount by Department', height=300)
-            fig_dept.update_layout(margin=dict(l=10,r=10,t=40,b=10), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig_dept, use_container_width=True)
+            if PLOTLY_AVAILABLE:
+                fig_dept = px.bar(dept_counts, x='department', y='count', text='count', title='Headcount by Department', height=300)
+                fig_dept.update_layout(margin=dict(l=10,r=10,t=40,b=10), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                st.plotly_chart(fig_dept, use_container_width=True)
+            else:
+                st.info('Install `plotly` for richer charts (add to requirements). Showing basic chart.')
+                st.bar_chart(dept_counts.set_index('department')['count'])
         else:
             st.info('Add employees to show headcount by department.')
 
@@ -368,9 +378,12 @@ if choice == 'Dashboard':
             payroll_df['generated_on_dt'] = pd.to_datetime(payroll_df['generated_on'], errors='coerce')
             trend = payroll_df.sort_values('generated_on_dt').tail(12)
             if not trend.empty:
-                fig_trend = px.line(trend, x='generated_on_dt', y='net_pay', markers=True, title='Net Pay Trend (recent payslips)', height=300)
-                fig_trend.update_layout(margin=dict(l=10,r=10,t=40,b=10), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-                st.plotly_chart(fig_trend, use_container_width=True)
+                if PLOTLY_AVAILABLE:
+                    fig_trend = px.line(trend, x='generated_on_dt', y='net_pay', markers=True, title='Net Pay Trend (recent payslips)', height=300)
+                    fig_trend.update_layout(margin=dict(l=10,r=10,t=40,b=10), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                    st.plotly_chart(fig_trend, use_container_width=True)
+                else:
+                    st.line_chart(trend.set_index('generated_on_dt')['net_pay'])
         else:
             st.info('Generate payroll to view trend chart.')
 
@@ -378,10 +391,14 @@ if choice == 'Dashboard':
         st.subheader('Attendance Breakdown')
         att_df = pd.read_sql_query('SELECT status, COUNT(*) as cnt FROM attendance GROUP BY status', conn)
         if not att_df.empty:
-            fig_pie = px.pie(att_df, names='status', values='cnt', hole=0.55, title='', height=340)
-            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            fig_pie.update_layout(margin=dict(l=10,r=10,t=10,b=10), showlegend=False, paper_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig_pie, use_container_width=True)
+            if PLOTLY_AVAILABLE:
+                fig_pie = px.pie(att_df, names='status', values='cnt', hole=0.55, title='', height=340)
+                fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                fig_pie.update_layout(margin=dict(l=10,r=10,t=10,b=10), showlegend=False, paper_bgcolor='rgba(0,0,0,0)')
+                st.plotly_chart(fig_pie, use_container_width=True)
+            else:
+                st.info('Install `plotly` for richer charts (add to requirements). Showing basic bar.')
+                st.bar_chart(att_df.set_index('status')['cnt'])
         else:
             st.info('No attendance records yet.')
             st.progress(min(100, int(emp_count * 0)))  # friendly placeholder
