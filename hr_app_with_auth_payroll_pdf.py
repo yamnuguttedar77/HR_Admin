@@ -13,6 +13,8 @@ Default admin auto-created:
 import streamlit as st
 import sqlite3
 import pandas as pd
+import numpy as np
+import plotly.express as px
 from datetime import date, datetime
 from passlib.hash import pbkdf2_sha256
 from fpdf import FPDF
@@ -183,7 +185,7 @@ def ensure_default_admin():
     count = cur.fetchone()[0]
     if count == 0:
         create_user('Admin', 'admin@123', role='admin')
-        # Do not print sensitive data in production logs; useful for local debugging only
+        # Local debug only; avoid printing secrets in production logs
         print('Default admin created: Admin / admin@123')
 ensure_default_admin()
 
@@ -197,7 +199,6 @@ class PayslipPDF(FPDF):
         self.ln(5)
 
     def employee_block(self, emp):
-        # Use double-quoted f-strings and single quotes inside .get() to avoid escaping
         self.set_font('Arial', '', 11)
         self.cell(40, 8, f"Employee ID: {emp.get('emp_id')}", ln=0)
         self.cell(0, 8, f"Name: {emp.get('name')}", ln=1)
@@ -238,9 +239,22 @@ def safe_rerun():
             st.session_state['_force_rerun'] = not st.session_state.get('_force_rerun', False)
 
 # ---------------------------
-# Streamlit UI
+# Streamlit UI + Styling
 # ---------------------------
 st.set_page_config(page_title='HR System', layout='wide')
+
+# small CSS to improve KPI card look
+st.markdown(
+    """
+    <style>
+    .kpi {padding: 18px; border-radius:12px; background: linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));}
+    .metric-label{color:#b7c1c9; font-size:14px;}
+    .metric-number{font-size:28px; font-weight:700; color:#ffffff;}
+    .small-muted{color:#99a3ab; font-size:13px;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 if 'user' not in st.session_state:
     st.session_state.user = None
@@ -291,20 +305,123 @@ user = st.session_state.user
 menu_options = ['Dashboard', 'Employees', 'Performance', 'Leaves', 'Attendance', 'Payroll', 'Users']
 choice = st.sidebar.selectbox('Menu', menu_options)
 
-# --- Dashboard ---
+# ---------- Attractive KPI Dashboard ----------
 if choice == 'Dashboard':
     st.title('Dashboard')
-    df_counts = {
-        'Employees': pd.read_sql_query('SELECT COUNT(*) as c FROM employees', conn)['c'][0],
-        'Leaves': pd.read_sql_query('SELECT COUNT(*) as c FROM leaves', conn)['c'][0],
-        'Attendance': pd.read_sql_query('SELECT COUNT(*) as c FROM attendance', conn)['c'][0],
-        'Payrolls': pd.read_sql_query('SELECT COUNT(*) as c FROM payroll', conn)['c'][0]
-    }
-    cols = st.columns(4)
-    for i,(k,v) in enumerate(df_counts.items()):
-        cols[i].metric(k, v)
-    st.subheader('Recent payrolls')
-    st.dataframe(get_payroll_df().sort_values(['year','month'], ascending=False).head(10))
+
+    # --- Gather small metrics ---
+    emp_count = pd.read_sql_query('SELECT COUNT(*) as c FROM employees', conn)['c'][0]
+    leave_count = pd.read_sql_query('SELECT COUNT(*) as c FROM leaves', conn)['c'][0]
+    attend_count = pd.read_sql_query('SELECT COUNT(*) as c FROM attendance', conn)['c'][0]
+    payroll_count = pd.read_sql_query('SELECT COUNT(*) as c FROM payroll', conn)['c'][0]
+
+    # payroll df and computed KPIs
+    payroll_df = get_payroll_df()
+    avg_net = float(payroll_df['net_pay'].mean()) if (not payroll_df.empty and 'net_pay' in payroll_df.columns) else 0.0
+    recent_net = float(payroll_df.sort_values(['generated_on'], ascending=False).head(1)['net_pay'].iloc[0]) if not payroll_df.empty else 0.0
+
+    # Top KPI cards
+    k1, k2, k3, k4 = st.columns([1.6,1,1,1])
+    with k1:
+        st.markdown('<div class="kpi">', unsafe_allow_html=True)
+        st.markdown('<div class="metric-label">Employees</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-number">{emp_count}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small-muted">Total headcount</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    with k2:
+        st.markdown('<div class="kpi">', unsafe_allow_html=True)
+        st.markdown('<div class="metric-label">Leaves</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-number">{leave_count}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small-muted">Total leave records</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    with k3:
+        st.markdown('<div class="kpi">', unsafe_allow_html=True)
+        st.markdown('<div class="metric-label">Attendance</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-number">{attend_count}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small-muted">Attendance entries</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    with k4:
+        st.markdown('<div class="kpi">', unsafe_allow_html=True)
+        st.markdown('<div class="metric-label">Payrolls</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-number">{payroll_count}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small-muted">Payslips generated</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('---')
+
+    # Charts row
+    left, right = st.columns([2,1.1])
+
+    with left:
+        # Headcount by department
+        emp_df = get_employees_df()
+        if not emp_df.empty:
+            dept_counts = emp_df.groupby('department')['emp_id'].count().reset_index().rename(columns={'emp_id':'count'})
+            fig_dept = px.bar(dept_counts, x='department', y='count', text='count', title='Headcount by Department', height=300)
+            fig_dept.update_layout(margin=dict(l=10,r=10,t=40,b=10), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+            st.plotly_chart(fig_dept, use_container_width=True)
+        else:
+            st.info('Add employees to show headcount by department.')
+
+        # Payroll trend (last 12 payslips)
+        if not payroll_df.empty:
+            payroll_df['generated_on_dt'] = pd.to_datetime(payroll_df['generated_on'], errors='coerce')
+            trend = payroll_df.sort_values('generated_on_dt').tail(12)
+            if not trend.empty:
+                fig_trend = px.line(trend, x='generated_on_dt', y='net_pay', markers=True, title='Net Pay Trend (recent payslips)', height=300)
+                fig_trend.update_layout(margin=dict(l=10,r=10,t=40,b=10), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                st.plotly_chart(fig_trend, use_container_width=True)
+        else:
+            st.info('Generate payroll to view trend chart.')
+
+    with right:
+        st.subheader('Attendance Breakdown')
+        att_df = pd.read_sql_query('SELECT status, COUNT(*) as cnt FROM attendance GROUP BY status', conn)
+        if not att_df.empty:
+            fig_pie = px.pie(att_df, names='status', values='cnt', hole=0.55, title='', height=340)
+            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+            fig_pie.update_layout(margin=dict(l=10,r=10,t=10,b=10), showlegend=False, paper_bgcolor='rgba(0,0,0,0)')
+            st.plotly_chart(fig_pie, use_container_width=True)
+        else:
+            st.info('No attendance records yet.')
+            st.progress(min(100, int(emp_count * 0)))  # friendly placeholder
+
+    st.markdown('---')
+
+    # Recent payrolls + quick summary/actions
+    colA, colB = st.columns([2.5,1])
+    with colA:
+        st.subheader('Recent payrolls')
+        if not payroll_df.empty:
+            st.dataframe(payroll_df.sort_values(['generated_on'], ascending=False).head(10).reset_index(drop=True))
+        else:
+            st.info('No payrolls generated yet.')
+
+    with colB:
+        st.subheader('Quick summary')
+        st.markdown(f'**Average net pay:** ₹{avg_net:,.2f}')
+        st.markdown(f'**Last generated net pay:** ₹{recent_net:,.2f}')
+        st.markdown('**Demo Actions**')
+        if st.button('Add sample employee'):
+            cur.execute("INSERT INTO employees(name,department,designation,basic_salary) VALUES(?,?,?,?)",
+                        ('Demo User','Operations','Executive',30000.0))
+            conn.commit()
+            st.success('Sample employee added')
+            safe_rerun()
+
+        if st.button('Generate sample payroll for last employee'):
+            df_e = get_employees_df()
+            if not df_e.empty:
+                empid = int(df_e.tail(1)['emp_id'].iloc[0])
+                basic_sal = float(df_e.tail(1)['basic_salary'].iloc[0])
+                generate_payroll(empid, datetime.now().strftime('%B'), datetime.now().year, basic_sal, hra_pct=0.2, allowances=2000.0, deductions=500.0)
+                st.success('Sample payroll generated')
+                safe_rerun()
+            else:
+                st.error('No employees to generate payroll for.')
+
+    st.markdown('---')
+    st.caption('Tip: Use the Users menu to add employees and user accounts. Charts refresh when new data is added.')
 
 # --- Employees ---
 elif choice == 'Employees':
@@ -458,13 +575,13 @@ elif choice == 'Users':
         st.dataframe(users_df)
 
         st.subheader('Change user password')
-        sel_username = st.selectbox('Select user to change password', users_df['username'].tolist())
+        sel_username = st.selectbox('Select user to change password', users_df['username'].tolist() if not users_df.empty else [])
         new_password = st.text_input('New password for selected user', type='password')
         if st.button('Change Password'):
-            if new_password:
+            if new_password and sel_username:
                 update_user_password(sel_username, new_password)
                 st.success(f"Password updated for user '{sel_username}'")
             else:
-                st.error('Please enter a new password')
+                st.error('Please select a user and enter a new password')
 
 # End of app
