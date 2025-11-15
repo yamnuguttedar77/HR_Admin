@@ -4,6 +4,7 @@ HR Management App (Streamlit)
 - Auth (admin/employee)
 - Employees, Performance, Leaves, Attendance
 - Payroll + PDF payslips (FPDF)
+
 Default admin auto-created:
   Username: Admin
   Password: admin@123
@@ -182,7 +183,7 @@ def ensure_default_admin():
     count = cur.fetchone()[0]
     if count == 0:
         create_user('Admin', 'admin@123', role='admin')
-        # NOTE: avoid printing in Streamlit cloud logs if you prefer
+        # Do not print sensitive data in production logs; useful for local debugging only
         print('Default admin created: Admin / admin@123')
 ensure_default_admin()
 
@@ -194,22 +195,25 @@ class PayslipPDF(FPDF):
         self.set_font('Arial', 'B', 14)
         self.cell(0, 10, 'Company XYZ - Payslip', ln=True, align='C')
         self.ln(5)
+
     def employee_block(self, emp):
+        # Use double-quoted f-strings and single quotes inside .get() to avoid escaping
         self.set_font('Arial', '', 11)
-        self.cell(40, 8, f'Employee ID: {emp.get(\"emp_id\")}', ln=0)
-        self.cell(0, 8, f'Name: {emp.get(\"name\")}', ln=1)
-        self.cell(40, 8, f'Department: {emp.get(\"department\")}', ln=0)
-        self.cell(0, 8, f'Designation: {emp.get(\"designation\")}', ln=1)
+        self.cell(40, 8, f"Employee ID: {emp.get('emp_id')}", ln=0)
+        self.cell(0, 8, f"Name: {emp.get('name')}", ln=1)
+        self.cell(40, 8, f"Department: {emp.get('department')}", ln=0)
+        self.cell(0, 8, f"Designation: {emp.get('designation')}", ln=1)
         self.ln(3)
+
     def payroll_block(self, pay):
         self.set_font('Arial', '', 11)
-        self.cell(40, 8, f'Month: {pay.get(\"month\")} {pay.get(\"year\")}', ln=1)
-        self.cell(60, 8, f'Basic: {pay.get(\"basic\")}', ln=1)
-        self.cell(60, 8, f'HRA: {pay.get(\"hra\")}', ln=1)
-        self.cell(60, 8, f'Allowances: {pay.get(\"allowances\")}', ln=1)
-        self.cell(60, 8, f'Deductions: {pay.get(\"deductions\")}', ln=1)
+        self.cell(40, 8, f"Month: {pay.get('month')} {pay.get('year')}", ln=1)
+        self.cell(60, 8, f"Basic: {pay.get('basic')}", ln=1)
+        self.cell(60, 8, f"HRA: {pay.get('hra')}", ln=1)
+        self.cell(60, 8, f"Allowances: {pay.get('allowances')}", ln=1)
+        self.cell(60, 8, f"Deductions: {pay.get('deductions')}", ln=1)
         self.set_font('Arial', 'B', 12)
-        self.cell(60, 10, f'Net Pay: {pay.get(\"net_pay\")}', ln=1)
+        self.cell(60, 10, f"Net Pay: {pay.get('net_pay')}", ln=1)
 
 def create_payslip_pdf(emp_row: dict, payroll_row: dict) -> bytes:
     pdf = PayslipPDF()
@@ -218,7 +222,7 @@ def create_payslip_pdf(emp_row: dict, payroll_row: dict) -> bytes:
     pdf.payroll_block(payroll_row)
     pdf.set_y(-30)
     pdf.set_font('Arial', 'I', 8)
-    pdf.cell(0, 10, f'Generated on {datetime.now().strftime(\"%Y-%m-%d %H:%M:%S\")}', align='C')
+    pdf.cell(0, 10, f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", align='C')
     return pdf.output(dest='S').encode('latin-1')
 
 # ---------------------------
@@ -226,14 +230,11 @@ def create_payslip_pdf(emp_row: dict, payroll_row: dict) -> bytes:
 # ---------------------------
 def safe_rerun():
     try:
-        # preferred method
         st.experimental_rerun()
     except Exception:
-        # fallback: mutate query params to force Streamlit to reload the page
         try:
             st.experimental_set_query_params(_r=str(datetime.now().timestamp()))
         except Exception:
-            # last fallback: set a session_state toggle (may not always force rerun)
             st.session_state['_force_rerun'] = not st.session_state.get('_force_rerun', False)
 
 # ---------------------------
@@ -267,7 +268,7 @@ with st.sidebar:
 
         st.markdown('---')
         st.subheader('Register (admin only)')
-        st.info('To create initial admin: default Admin user exists; create further users from Users menu.')
+        st.info('Default Admin exists. Create further users from Users menu.')
         reg_user = st.text_input('New username', key='reg_user')
         reg_pass = st.text_input('New password', type='password', key='reg_pass')
         reg_role = st.selectbox('Role', ['admin', 'employee'], key='reg_role')
@@ -290,7 +291,7 @@ user = st.session_state.user
 menu_options = ['Dashboard', 'Employees', 'Performance', 'Leaves', 'Attendance', 'Payroll', 'Users']
 choice = st.sidebar.selectbox('Menu', menu_options)
 
-# (the rest of UI - same as before)
+# --- Dashboard ---
 if choice == 'Dashboard':
     st.title('Dashboard')
     df_counts = {
@@ -305,6 +306,7 @@ if choice == 'Dashboard':
     st.subheader('Recent payrolls')
     st.dataframe(get_payroll_df().sort_values(['year','month'], ascending=False).head(10))
 
+# --- Employees ---
 elif choice == 'Employees':
     st.title('Employees')
     if user['role'] == 'admin':
@@ -345,6 +347,7 @@ elif choice == 'Employees':
             else:
                 st.table(row.T)
 
+# --- Performance ---
 elif choice == 'Performance':
     st.title('Performance Reviews')
     if user['role'] == 'admin':
@@ -364,6 +367,7 @@ elif choice == 'Performance':
         else:
             st.dataframe(pd.read_sql_query('SELECT * FROM performance WHERE emp_id=?', conn, params=(emp_id,)))
 
+# --- Leaves ---
 elif choice == 'Leaves':
     st.title('Leaves')
     df_emp = get_employees_df()
@@ -376,6 +380,7 @@ elif choice == 'Leaves':
     st.subheader('All Leaves')
     st.dataframe(pd.read_sql_query('SELECT l.*, e.name FROM leaves l JOIN employees e ON l.emp_id=e.emp_id', conn))
 
+# --- Attendance ---
 elif choice == 'Attendance':
     st.title('Attendance')
     df_emp = get_employees_df()
@@ -387,6 +392,7 @@ elif choice == 'Attendance':
     st.subheader('Attendance Records')
     st.dataframe(pd.read_sql_query('SELECT a.*, e.name FROM attendance a JOIN employees e ON a.emp_id=e.emp_id', conn))
 
+# --- Payroll ---
 elif choice == 'Payroll':
     st.title('Payroll')
     df_emp = get_employees_df()
@@ -426,6 +432,7 @@ elif choice == 'Payroll':
                 pdf_bytes = create_payslip_pdf(emp_row, pr)
                 st.download_button('Download Payslip PDF', data=pdf_bytes, file_name=f"payslip_{emp_id}_{pr['month']}_{pr['year']}.pdf", mime='application/pdf')
 
+# --- Users / Admin ---
 elif choice == 'Users':
     if user['role'] != 'admin':
         st.error('Only admin can manage users')
@@ -461,4 +468,3 @@ elif choice == 'Users':
                 st.error('Please enter a new password')
 
 # End of app
-
